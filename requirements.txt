@@ -1,0 +1,9 @@
+agency-swarm[fastapi]>=1.2.1
+fastapi
+uvicorn
+httpx==0.28.1
+python-dotenv==1.2.1
+pymupdf==1.26.6
+openai==2.8.0
+pydantic==2.12.4
+requests==2.32.5
