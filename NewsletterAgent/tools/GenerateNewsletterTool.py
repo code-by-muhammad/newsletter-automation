@@ -12,6 +12,7 @@ from utils.news_letter_tool.asx_fetcher import fetch_announcements, group_health
 from utils.news_letter_tool.pdf_processor import process_announcement_pdf
 from utils.news_letter_tool.healthcare_stocks import HEALTHCARE_STOCKS
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 class Action(str, Enum):
@@ -166,33 +167,47 @@ class GenerateNewsletterTool(BaseTool):
         return pdfs_to_process
 
     def _process_pdfs(self, pdfs_to_process: list) -> list:
-        """Process each PDF and generate summaries."""
-        results = []
+        """Process each PDF and generate summaries, up to 5 in parallel."""
 
-        for item in pdfs_to_process:
-            code = item['code']
-            ann = item['announcement']
-            file_id = ann.get('fileId')
-            title = ann.get('heading', 'Unknown')
-            date_time = ann.get('datetime', 'Unknown')
-            pdf_url = f"https://quoteapi.com/files/stocksdigital/announcements/{code.lower()}.asx/{file_id}.pdf"
+        def worker(item: dict):
+            """Process a single PDF and return a result dict or None."""
+            try:
+                code = item['code']
+                ann = item['announcement']
+                file_id = ann.get('fileId')
+                title = ann.get('heading', 'Unknown')
+                date_time = ann.get('datetime', 'Unknown')
+                pdf_url = f"https://quoteapi.com/files/stocksdigital/announcements/{code.lower()}.asx/{file_id}.pdf"
 
-            summary = process_announcement_pdf(
-                pdf_url=pdf_url,
-                announcement_title=title,
-                company_code=code,
-                verbose=False
-            )
+                summary = process_announcement_pdf(
+                    pdf_url=pdf_url,
+                    announcement_title=title,
+                    company_code=code,
+                    verbose=False
+                )
 
-            if summary and summary.priority_score >= self.min_priority_score:
-                results.append({
-                    'company_code': code,
-                    'title': title,
-                    'datetime': date_time,
-                    'pdf_url': pdf_url,
-                    'summary': summary.summary,
-                    'priority_score': summary.priority_score
-                })
+                if summary and summary.priority_score >= self.min_priority_score:
+                    return {
+                        'company_code': code,
+                        'title': title,
+                        'datetime': date_time,
+                        'pdf_url': pdf_url,
+                        'summary': summary.summary,
+                        'priority_score': summary.priority_score
+                    }
+            except Exception:
+                # Skip failed PDFs but continue processing others
+                return None
+
+        results: List[dict] = []
+
+        # Process PDFs with a maximum of 5 concurrent workers
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            future_to_item = {executor.submit(worker, item): item for item in pdfs_to_process}
+            for future in as_completed(future_to_item):
+                result = future.result()
+                if result is not None:
+                    results.append(result)
 
         return results
 
@@ -219,6 +234,6 @@ if __name__ == "__main__":
     print(result[:300] + "...\n")
 
     print("Test 2: Generate newsletter with limit")
-    tool = GenerateNewsletterTool(action=Action.GENERATE_NEWSLETTER, pdf_limit=2)
+    tool = GenerateNewsletterTool(action=Action.GENERATE_NEWSLETTER)
     result = tool.run()
     print(result)
